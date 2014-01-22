@@ -1,0 +1,10 @@
+PODS:
+  - Salesforce-Common-Utils-iOS-Taptera (1.0)
+
+DEPENDENCIES:
+  - Salesforce-Common-Utils-iOS-Taptera
+
+SPEC CHECKSUMS:
+  Salesforce-Common-Utils-iOS-Taptera: 6154d0561d98aa8a89befb7e54e4599ee50d773e
+
+COCOAPODS: 0.28.0
