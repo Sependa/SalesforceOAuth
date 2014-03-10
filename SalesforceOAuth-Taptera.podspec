@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.platform  = :ios, '6.0'
 
   s.requires_arc = true
-  s.source_files = "Classes/*.{h,m}"
+  s.source_files = "SalesforceOAuth/Classes/**/*.{h,m}"
 
   s.header_dir = 'SalesforceOAuth'
 
