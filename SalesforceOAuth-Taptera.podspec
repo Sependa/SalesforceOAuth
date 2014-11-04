@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = "SalesforceOAuth-Taptera"
-  s.version = "1.0"
+  s.version = "2.3"
   s.summary = "Taptera version of Salesforce OAuth for iOS."
   s.homepage = "https://github.com/Taptera/SalesforceOAuth.git"
   s.license      = {:type => 'custom', :file => 'LICENSE.md'}
