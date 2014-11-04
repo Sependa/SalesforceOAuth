@@ -49,6 +49,8 @@ static NSString * const kSFOAuthGrantType                       = @"grant_type";
 static NSString * const kSFOAuthGrantTypeRefreshToken           = @"refresh_token";
 static NSString * const kSFOAuthId                              = @"id";
 static NSString * const kSFOAuthInstanceUrl                     = @"instance_url";
+static NSString * const kSFOAuthCommunityId                     = @"sfdc_community_id";
+static NSString * const kSFOAuthCommunityUrl                    = @"sfdc_community_url";
 static NSString * const kSFOAuthIssuedAt                        = @"issued_at";
 static NSString * const kSFOAuthRedirectUri                     = @"redirect_uri";
 static NSString * const kSFOAuthRefreshToken                    = @"refresh_token";
@@ -88,7 +90,6 @@ static NSUInteger kSFOAuthReponseBufferLength                   = 512; // bytes
 static NSString * const kHttpMethodPost                         = @"POST";
 static NSString * const kHttpHeaderContentType                  = @"Content-Type";
 static NSString * const kHttpPostContentType                    = @"application/x-www-form-urlencoded";
-
 
 @implementation SFOAuthCoordinator
 
@@ -145,21 +146,31 @@ static NSString * const kHttpPostContentType                    = @"application/
     NSAssert(nil != self.delegate, @"cannot authenticate with nil delegate");
     
     if (self.authenticating) {
-        NSLog(@"SFOAuthCoordinator:authenticate: Error: authenticate called while already authenticating. Call stopAuthenticating first.");
+        [self log:SFLogLevelDebug msg:@"SFOAuthCoordinator:authenticate: Error: authenticate called while already authenticating. Call stopAuthenticating first."];
         return;
     }
     if (self.credentials.logLevel < kSFOAuthLogLevelWarning) {
-        NSLog(@"SFOAuthCoordinator:authenticate: authenticating as %@ %@ refresh token on '%@://%@' ...", 
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:authenticate: authenticating as %@ %@ refresh token on '%@://%@' ...",
               self.credentials.clientId, (nil == self.credentials.refreshToken ? @"without" : @"with"), 
-              self.credentials.protocol, self.credentials.domain);
+              self.credentials.protocol, self.credentials.domain];
     }
-
-    //clear the webview cache
-    [[NSURLCache sharedURLCache] removeAllCachedResponses];
 
     self.authenticating = YES;
     
-    // TODO: reachability
+    // Don't try to authenticate if there is no network available
+    if ([self.delegate respondsToSelector:@selector(oauthCoordinatorIsNetworkAvailable:)] &&
+        ![self.delegate oauthCoordinatorIsNetworkAvailable:self]) {
+        [self log:SFLogLevelDebug msg:@"Network is not available, so bypassing login"];
+        NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNotConnectedToInternet userInfo:nil];
+        SFOAuthInfo *authInfo;
+        if (self.credentials.refreshToken) {
+            authInfo = [[SFOAuthInfo alloc] initWithAuthType:SFOAuthTypeRefresh];
+        } else {
+            authInfo = [[SFOAuthInfo alloc] initWithAuthType:SFOAuthTypeUserAgent];
+        }
+        [self notifyDelegateOfFailure:error authInfo:authInfo];
+		return;
+    }
     
     if (self.credentials.refreshToken) {
         // clear any access token we may have and begin refresh flow
@@ -281,7 +292,7 @@ static NSString * const kHttpPostContentType                    = @"application/
     }
     
     if (self.credentials.logLevel < kSFOAuthLogLevelInfo) {
-        NSLog(@"SFOAuthCoordinator:beginUserAgentFlow with %@", approvalUrl);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:beginUserAgentFlow with %@", approvalUrl];
     }
     
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:approvalUrl]];
@@ -329,7 +340,7 @@ static NSString * const kHttpPostContentType                    = @"application/
     }
 	
     if (self.credentials.logLevel < kSFOAuthLogLevelInfo) {
-        NSLog(@"SFOAuthCoordinator:beginTokenRefreshFlow with %@", logString);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:beginTokenRefreshFlow with %@", logString];
     }
 
 	NSData *encodedBody = [params dataUsingEncoding:NSUTF8StringEncoding];
@@ -389,42 +400,65 @@ static NSString * const kHttpPostContentType                    = @"application/
         }
 #pragma clang diagnostic pop
     } else {
-        NSLog(@"SFOAuthCoordinator:handleRefreshResponse: Both SBJsonParser and NSJSONSerialization are missing");
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:handleRefreshResponse: Both SBJsonParser and NSJSONSerialization are missing"];
         NSAssert(NO, @"Either SBJsonParser or NSJSONSerialization must be available!");
     }
     
     if (nil == jsonError && [json isKindOfClass:[NSDictionary class]]) {
         NSDictionary *dict = (NSDictionary *)json;
-        if (nil != [dict objectForKey:kSFOAuthError]) {
-            NSError *error = [[self class] errorWithType:[dict objectForKey:kSFOAuthError] description:[dict objectForKey:kSFOAuthErrorDescription]];
+        if (nil != dict[kSFOAuthError]) {
+            NSError *error = [[self class] errorWithType:dict[kSFOAuthError] description:dict[kSFOAuthErrorDescription]];
             [self notifyDelegateOfFailure:error authInfo:authInfo];
         } else {
-            if ([dict objectForKey:kSFOAuthRefreshToken]) {
+            if (dict[kSFOAuthRefreshToken]) {
                 // Refresh token is available. This happens when the IP bypass flow is used.
-                self.credentials.refreshToken = [dict objectForKey:kSFOAuthRefreshToken];
+                self.credentials.refreshToken = dict[kSFOAuthRefreshToken];
             } else {
                 // In a non-IP flow, we already have the refresh token here.
             }
-            self.credentials.identityUrl    = [NSURL URLWithString:[dict objectForKey:kSFOAuthId]];
-            self.credentials.accessToken    = [dict objectForKey:kSFOAuthAccessToken];
-            self.credentials.instanceUrl    = [NSURL URLWithString:[dict objectForKey:kSFOAuthInstanceUrl]];
-            self.credentials.issuedAt       = [[self class] timestampStringToDate:[dict objectForKey:kSFOAuthIssuedAt]];
 
+            [self updateCredentials:dict];
+            
             [self notifyDelegateOfSuccess:authInfo];
         }
     } else {
         // failed to parse JSON
-        NSLog(@"SFOAuthCoordinator:handleRefreshResponse: JSON parse error: %@", jsonError);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:handleRefreshResponse: JSON parse error: %@", jsonError];
         NSError *error = [[self class] errorWithType:kSFOAuthErrorTypeMalformedResponse description:@"failed to parse response JSON"];
         NSMutableDictionary *errorDict = [NSMutableDictionary dictionaryWithDictionary:jsonError.userInfo];
         if (responseString) {
-            [errorDict setObject:responseString forKey:@"response_data"];
+            errorDict[@"response_data"] = responseString;
         }
         if (error) {
-            [errorDict setObject:error forKey:NSUnderlyingErrorKey];
+            errorDict[NSUnderlyingErrorKey] = error;
         }
         NSError *finalError = [NSError errorWithDomain:kSFOAuthErrorDomain code:error.code userInfo:errorDict];
         [self notifyDelegateOfFailure:finalError authInfo:authInfo];
+    }
+}
+
+/** Update the credentials using the provided oauth parameters.
+ This method only update the following parameters:
+ - identityUrl
+ - accessToken
+ - instanceUrl
+ - issuedAt
+ - communityId
+ - communityUrl
+ */
+- (void)updateCredentials:(NSDictionary*)params
+{
+    self.credentials.identityUrl    = [NSURL URLWithString:params[kSFOAuthId]];
+    self.credentials.accessToken    = params[kSFOAuthAccessToken];
+    self.credentials.instanceUrl    = [NSURL URLWithString:params[kSFOAuthInstanceUrl]];
+    self.credentials.issuedAt       = [[self class] timestampStringToDate:params[kSFOAuthIssuedAt]];
+
+    self.credentials.communityId    = params[kSFOAuthCommunityId];
+    NSString *communityUrl = params[kSFOAuthCommunityUrl];
+    if (communityUrl) {
+        self.credentials.communityUrl = [NSURL URLWithString:communityUrl];
+    } else {
+        self.credentials.communityUrl = nil;
     }
 }
 
@@ -463,7 +497,7 @@ static NSString * const kHttpPostContentType                    = @"application/
     // refresh flow completing.
     
     [self cleanupRefreshTimer];
-    NSLog(@"Refresh attempt timed out after %f seconds.", self.timeout);
+    [self log:SFLogLevelDebug format:@"Refresh attempt timed out after %f seconds.", self.timeout];
     [self stopAuthentication];
     NSError *error = [[self class] errorWithType:kSFOAuthErrorTypeTimeout
                                      description:@"The token refresh process timed out."];
@@ -476,8 +510,8 @@ static NSString * const kHttpPostContentType                    = @"application/
 - (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType {
     
     if (self.credentials.logLevel < kSFOAuthLogLevelWarning) {
-        NSLog(@"SFOAuthCoordinator:webView:shouldStartLoadWithRequest: (navType=%u): host=%@ : path=%@", 
-              navigationType, request.URL.host, request.URL.path);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:webView:shouldStartLoadWithRequest: (navType=%ld): host=%@ : path=%@",
+              (long)navigationType, request.URL.host, request.URL.path];
     }
     
     SFOAuthInfo *authInfo = [[SFOAuthInfo alloc] initWithAuthType:SFOAuthTypeUserAgent];
@@ -497,7 +531,7 @@ static NSString * const kHttpPostContentType                    = @"application/
         } else if ([requestUrl query]) {
             response = [requestUrl query];
         } else {
-            NSLog(@"SFOAuthCoordinator:webView:shouldStartLoadWithRequest: Error: response has no payload: %@", requestUrlString);
+            [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:webView:shouldStartLoadWithRequest: Error: response has no payload: %@", requestUrlString];
             
             NSError *error = [[self class] errorWithType:kSFOAuthErrorTypeMalformedResponse description:@"redirect response has no payload"];
             [self notifyDelegateOfFailure:error authInfo:authInfo];
@@ -506,15 +540,13 @@ static NSString * const kHttpPostContentType                    = @"application/
         
         if (response) {            
             NSDictionary *params = [[self class] parseQueryString:response];
-            NSString *error = [params objectForKey:kSFOAuthError];
+            NSString *error = params[kSFOAuthError];
             if (nil == error) {
-                self.credentials.identityUrl    = [NSURL URLWithString:[params objectForKey:kSFOAuthId]];
-                self.credentials.accessToken    = [params objectForKey:kSFOAuthAccessToken];
-                self.credentials.refreshToken   = [params objectForKey:kSFOAuthRefreshToken];
-                self.credentials.instanceUrl    = [NSURL URLWithString:[params objectForKey:kSFOAuthInstanceUrl]];
-                self.credentials.issuedAt       = [[self class] timestampStringToDate:[params objectForKey:kSFOAuthIssuedAt]];
-                                
-                self.approvalCode = [params objectForKey:kSFOAuthApprovalCode];
+                [self updateCredentials:params];
+                
+                self.credentials.refreshToken   = params[kSFOAuthRefreshToken];
+
+                self.approvalCode = params[kSFOAuthApprovalCode];
                 if (self.approvalCode) {
                     // If there is an approval code, then proceed to get the access/refresh token (IP bypass flow).
                     [self beginTokenRefreshFlow];
@@ -524,14 +556,14 @@ static NSString * const kHttpPostContentType                    = @"application/
                 }
             } else {
                 NSError *finalError;
-                NSError *error = [[self class] errorWithType:[params objectForKey:kSFOAuthError] 
-                                                 description:[params objectForKey:kSFOAuthErrorDescription]];
+                NSError *error = [[self class] errorWithType:params[kSFOAuthError] 
+                                                 description:params[kSFOAuthErrorDescription]];
                 
                 // add any additional relevant info to the userInfo dictionary
                 
                 if (kSFOAuthErrorInvalidClientId == error.code) {
                     NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:error.userInfo];
-                    [dict setObject:self.credentials.clientId forKey:kSFOAuthClientId];
+                    dict[kSFOAuthClientId] = self.credentials.clientId;
                     finalError = [NSError errorWithDomain:error.domain code:error.code userInfo:dict];
                 } else {
                     finalError = error;
@@ -548,7 +580,7 @@ static NSString * const kHttpPostContentType                    = @"application/
     NSURL *url = webView.request.URL;
     
     if (self.credentials.logLevel < kSFOAuthLogLevelWarning) {
-        NSLog(@"SFOAuthCoordinator:webViewDidStartLoad: host=%@ : path=%@", url.host, url.path);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:webViewDidStartLoad: host=%@ : path=%@", url.host, url.path];
     }
     
     if ([self.delegate respondsToSelector:@selector(oauthCoordinator:didStartLoad:)]) {
@@ -581,13 +613,15 @@ static NSString * const kHttpPostContentType                    = @"application/
         [self.delegate oauthCoordinator:self didFinishLoad:webView error:error];
     }
 
+    NSURL *requestUrl = [webView.request URL];
+    NSString *errorUrlString = [NSString stringWithFormat:@"%@://%@%@", [requestUrl scheme], [requestUrl host], [requestUrl relativePath]];
     if (-999 == error.code) { 
         // -999 errors (operation couldn't be completed) occur during normal execution, therefore only log for debugging
         if (self.credentials.logLevel < kSFOAuthLogLevelInfo) {
-            NSLog(@"SFOAuthCoordinator:didFailLoadWithError: %@ on URL: %@", error, webView.request.URL);
+            [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:didFailLoadWithError: error code: %ld, description: %@, URL: %@", (long)error.code, [error localizedDescription], errorUrlString];
         }
     } else {
-        NSLog(@"SFOAuthCoordinator:didFailLoadWithError %@ on URL: %@", error, webView.request.URL);
+        [self log:SFLogLevelDebug format:@"SFOAuthCoordinator:didFailLoadWithError: error code: %ld, description: %@, URL: %@", (long)error.code, [error localizedDescription], errorUrlString];
         SFOAuthInfo *authInfo = [[SFOAuthInfo alloc] initWithAuthType:SFOAuthTypeUserAgent];
         [self notifyDelegateOfFailure:error authInfo:authInfo];
     }
@@ -596,7 +630,9 @@ static NSString * const kHttpPostContentType                    = @"application/
 #pragma mark - NSURLConnectionDelegate (Refresh Token Flow)
 
 - (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error {
-	NSLog(@"SFOAuthCoordinator:connection:didFailWithError: %@", error);
+    NSURL *requestUrl = [[connection currentRequest] URL];
+    NSString *errorUrlString = [NSString stringWithFormat:@"%@://%@%@", [requestUrl scheme], [requestUrl host], [requestUrl relativePath]];
+	[self log:SFLogLevelDebug format:@"SFOAuthCoordinator:connection:didFailWithError: error code: %ld, description: %@, URL: %@", (long)error.code, [error localizedDescription], errorUrlString];
     [self stopRefreshFlowConnectionTimer];
     SFOAuthInfo *authInfo = [[SFOAuthInfo alloc] initWithAuthType:SFOAuthTypeRefresh];
     [self notifyDelegateOfFailure:error authInfo:authInfo];
@@ -637,13 +673,13 @@ static NSString * const kHttpPostContentType                    = @"application/
 	NSMutableDictionary *dict = [[NSMutableDictionary alloc] initWithCapacity:pairs.count];
 	for (NSString *pair in pairs) {
         NSArray *keyValue = [pair componentsSeparatedByString:@"="];
-		NSString *key = [[[keyValue objectAtIndex:0]
+		NSString *key = [[keyValue[0]
                           stringByReplacingOccurrencesOfString:@"+" withString:@" "]
                          stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
-		NSString *value = [[[keyValue objectAtIndex:1]
+		NSString *value = [[keyValue[1]
                             stringByReplacingOccurrencesOfString:@"+" withString:@" "]
                            stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
-		[dict setObject:value forKey:key];
+		dict[key] = value;
 	}
 	NSDictionary *result = [NSDictionary dictionaryWithDictionary:dict];
 	return result;
@@ -681,9 +717,8 @@ static NSString * const kHttpPostContentType                    = @"application/
         code = kSFOAuthErrorWrongVersion;
     }
 
-    NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:type,        kSFOAuthError,
-                                                                    description,   NSLocalizedDescriptionKey,
-                                                                    nil];
+    NSDictionary *dict = @{kSFOAuthError: type,
+                                                                    NSLocalizedDescriptionKey: description};
     NSError *error = [NSError errorWithDomain:kSFOAuthErrorDomain code:code userInfo:dict];
     return error;
 }
