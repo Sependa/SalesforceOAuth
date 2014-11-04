@@ -14,6 +14,7 @@ Pod::Spec.new do |s|
   s.header_dir = 'SalesforceOAuth'
 
   s.dependency 'Salesforce-Common-Utils-iOS-Taptera'
+  s.dependency 'SalesforceSecurity-Taptera'
 
   s.prefix_header_file = 'SalesforceOAuth/SalesforceOAuth-Prefix.pch'
 
