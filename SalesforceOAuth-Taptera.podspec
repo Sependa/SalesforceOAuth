@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = "SalesforceOAuth-Taptera"
-  s.version = "2.3"
+  s.version = "2.3.1"
   s.summary = "Taptera version of Salesforce OAuth for iOS."
   s.homepage = "https://github.com/Taptera/SalesforceOAuth.git"
   s.license      = {:type => 'custom', :file => 'LICENSE.md'}
@@ -13,8 +13,8 @@ Pod::Spec.new do |s|
 
   s.header_dir = 'SalesforceOAuth'
 
-  s.dependency 'Salesforce-Common-Utils-iOS-Taptera'
-  s.dependency 'SalesforceSecurity-Taptera'
+  s.dependency 'Salesforce-Common-Utils-iOS-Taptera', '2.3.1'
+  s.dependency 'SalesforceSecurity-Taptera', '2.3.1'
 
   s.prefix_header_file = 'SalesforceOAuth/SalesforceOAuth-Prefix.pch'
 
