@@ -1,6 +1,6 @@
 PODS:
   - CocoaLumberjack (1.9.2):
-    - CocoaLumberjack/Extensions
+    - CocoaLumberjack/Extensions (= 1.9.2)
   - CocoaLumberjack/Core (1.9.2)
   - CocoaLumberjack/Extensions (1.9.2):
     - CocoaLumberjack/Core
@@ -19,10 +19,10 @@ DEPENDENCIES:
   - SalesforceSecurity-Taptera (= 2.3.1)
 
 SPEC CHECKSUMS:
-  CocoaLumberjack: 205769c032b5fef85b92472046bcc8b7e7c8a817
+  CocoaLumberjack: 628fca2e88ef06f7cf6817309aa405f325d9a6fa
   MKNetworkKit-Salesforce-Taptera: 493e25d82acf3e051cf8f384c13e715acd54725a
-  Reachability: 8e9635e3cb4f98e7f825e51147f677ecc694d0e7
+  Reachability: dd9aa4fb6667b9f787690a74f53cb7634ce99893
   Salesforce-Common-Utils-iOS-Taptera: 1b11fcfbd2c5d1b212690481501f155aef3963c2
   SalesforceSecurity-Taptera: 8d4dfe7201c3c023d5a57ff2d8f559f5502c2033
 
-COCOAPODS: 0.34.4
+COCOAPODS: 0.39.0
